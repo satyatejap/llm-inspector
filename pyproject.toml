@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "llm_inspector"
+version = "0.1.0"
+description = "Capture LangChain / LangGraph LLM calls and visualize messages and prompt-cache usage."
+requires-python = ">=3.9"
+dependencies = ["langchain-core"]
+
+[tool.setuptools.packages.find]
+include = ["llm_inspector*"]
+
+[tool.setuptools.package-data]
+llm_inspector = ["static/*.html", "_inject/*.py"]

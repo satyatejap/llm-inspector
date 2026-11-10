@@ -1,0 +1,655 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LLM call inspector</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2314a06a'/%3E%3Crect x='7' y='7' width='18' height='5' rx='1.5' fill='white'/%3E%3Crect x='7' y='14' width='18' height='5' rx='1.5' fill='white' opacity='.75'/%3E%3Crect x='7' y='21' width='12' height='4' rx='1.5' fill='white' opacity='.5'/%3E%3C/svg%3E">
+<style>
+:root {
+  --bg: #eef1f5; --panel: #fbfcfd; --ink: #16202b; --muted: #5d6c7b; --line: #d3dae2;
+  --hit: #14a06a; --write: #eea100; --unc: #c3ccd6;
+  --tools: #7c5cc4; --system: #2f78c4; --human: #4b5b6b; --ai: #5560d8; --toolres: #8c7a4f; --other: #888;
+  --warn: #c9362f; --accent: #2f78c4;
+  --good-bg: #e3f5ec; --warn-bg: #fdecea; --info-bg: #e6f0fb; --note-bg: #fff4d6;
+  --shadow: 0 1px 2px rgba(20,30,45,.06), 0 4px 14px rgba(20,30,45,.06);
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --sans: "Avenir Next", "Segoe UI", system-ui, -apple-system, Helvetica, Arial, sans-serif;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #12171d; --panel: #1a212a; --ink: #e6ebf0; --muted: #93a2b2; --line: #2d3743; --unc: #3b4756;
+    --tools: #a48cf0; --system: #62a2ee; --human: #9aabbc; --ai: #8c94ff; --toolres: #c4ae7a; --other: #999; --accent: #62a2ee;
+    --good-bg: #12302a; --warn-bg: #3a1e1e; --info-bg: #182a40; --note-bg: #3a3118;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.3);
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #12171d; --panel: #1a212a; --ink: #e6ebf0; --muted: #93a2b2; --line: #2d3743; --unc: #3b4756;
+  --tools: #a48cf0; --system: #62a2ee; --human: #9aabbc; --ai: #8c94ff; --toolres: #c4ae7a; --other: #999; --accent: #62a2ee;
+  --good-bg: #12302a; --warn-bg: #3a1e1e; --info-bg: #182a40; --note-bg: #3a3118;
+  --shadow: 0 1px 2px rgba(0,0,0,.3), 0 4px 14px rgba(0,0,0,.3);
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 13px/1.5 var(--sans); }
+button, select, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+code, kbd { font-family: var(--mono); }
+kbd { background: var(--bg); border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; padding: 0 5px; font-size: 11px; }
+
+.btn { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; display: inline-flex; align-items: center; gap: 6px; }
+.btn:hover { border-color: var(--accent); }
+.btn.icon { padding: 4px 8px; }
+.btn.danger:hover { border-color: var(--warn); color: var(--warn); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+.app { display: grid; grid-template-columns: 290px 1fr; grid-template-rows: auto 1fr; height: 100%; }
+.app.detail-open { grid-template-columns: 290px 1fr 420px; }
+
+/* header */
+.hdr { grid-column: 1 / -1; display: flex; align-items: center; gap: 14px; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+.hdr h1 { font-size: 15px; margin: 0; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+.hdr .logo { width: 20px; height: 20px; border-radius: 5px; background: var(--hit); display: grid; place-items: center; }
+.hdr .logo i { display: block; width: 11px; height: 3px; background: #fff; border-radius: 1px; box-shadow: 0 4px 0 rgba(255,255,255,.7), 0 8px 0 -0px rgba(255,255,255,.4); margin-top: -8px; }
+.hdr .sp { flex: 1; }
+.live { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; cursor: pointer; user-select: none; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--unc); }
+.live.on .dot { background: var(--hit); box-shadow: 0 0 0 0 var(--hit); animation: pulse 2s infinite; }
+.live.err .dot { background: var(--warn); animation: none; }
+@keyframes pulse { 70% { box-shadow: 0 0 0 6px transparent; } 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--hit) 60%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .live.on .dot { animation: none; } }
+
+/* sidebar */
+.side { background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+.side .search { padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.side .search input { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 9px; }
+.side .count { padding: 8px 16px 4px; color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.runs { overflow: auto; flex: 1; padding-bottom: 12px; }
+.run { position: relative; padding: 9px 16px; border-top: 1px solid var(--line); cursor: pointer; }
+.run:hover { background: color-mix(in srgb, var(--ink) 5%, transparent); }
+.run[aria-current="true"] { background: color-mix(in srgb, var(--hit) 13%, var(--panel)); box-shadow: inset 3px 0 0 var(--hit); }
+.run .cmd { font-family: var(--mono); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-right: 22px; }
+.run .meta { color: var(--muted); font-size: 11.5px; display: flex; justify-content: space-between; gap: 8px; margin-top: 2px; }
+.run .mini { height: 4px; border-radius: 2px; background: var(--unc); margin-top: 6px; overflow: hidden; }
+.run .mini b { display: block; height: 100%; background: var(--hit); }
+.run .del { position: absolute; top: 6px; right: 8px; opacity: 0; border: none; background: none; color: var(--muted); font-size: 14px; padding: 0 5px; border-radius: 4px; }
+.run:hover .del, .run:focus-within .del { opacity: 1; }
+.run .del:hover { color: var(--warn); background: var(--warn-bg); }
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--hit); font-weight: 600; }
+.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--hit); }
+
+/* empty / onboarding */
+.empty { padding: 18px 16px; color: var(--muted); }
+.onboard { max-width: 640px; margin: 8vh auto; padding: 0 20px; }
+.onboard h2 { margin: 0 0 6px; font-size: 20px; color: var(--ink); }
+.onboard p { color: var(--muted); margin: 0 0 16px; font-size: 14px; }
+.step { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; box-shadow: var(--shadow); }
+.step .n { font-weight: 650; margin-bottom: 4px; color: var(--ink); }
+.step .n span { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--accent); color: #fff; font-size: 11px; margin-right: 8px; }
+.step .d { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+.cmdbox { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 6px 6px 6px 10px; font-family: var(--mono); font-size: 12px; }
+.cmdbox code { flex: 1; overflow-x: auto; white-space: nowrap; }
+.skeleton { height: 50px; margin: 10px 16px; border-radius: 6px; background: linear-gradient(90deg, var(--line), var(--bg), var(--line)); background-size: 200% 100%; animation: sk 1.4s infinite; }
+@keyframes sk { to { background-position: -200% 0; } }
+
+/* main */
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.top { padding: 10px 18px; background: var(--panel); border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; }
+.top select { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; max-width: 460px; }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { border: none; background: var(--panel); padding: 4px 10px; border-right: 1px solid var(--line); }
+.seg button:last-child { border-right: none; }
+.seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.legend { display: flex; gap: 14px; margin-left: auto; align-items: center; color: var(--muted); font-size: 12px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.scroll { flex: 1; overflow: auto; min-height: 0; }
+
+.insights { display: flex; flex-direction: column; gap: 8px; padding: 12px 18px 0; }
+.ins { display: flex; gap: 10px; align-items: flex-start; border-radius: 8px; padding: 9px 12px; border: 1px solid var(--line); }
+.ins .ic { font-weight: 700; width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; color: #fff; flex: none; margin-top: 1px; }
+.ins.good { background: var(--good-bg); } .ins.good .ic { background: var(--hit); }
+.ins.warn { background: var(--warn-bg); } .ins.warn .ic { background: var(--warn); }
+.ins.info { background: var(--info-bg); } .ins.info .ic { background: var(--accent); }
+.ins .tt { font-weight: 650; }
+.ins .dd { color: var(--muted); }
+.ins button.lnk { background: none; border: none; color: var(--accent); padding: 0; text-decoration: underline; }
+
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; padding: 12px 18px; }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; }
+.stat .v { font-size: 20px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.stat .l { color: var(--muted); font-size: 12px; }
+.stat .s { color: var(--hit); font-size: 11.5px; font-weight: 600; }
+.bar { height: 8px; width: 100%; border-radius: 4px; overflow: hidden; display: flex; background: var(--unc); margin-top: 6px; }
+.bar b { display: block; height: 100%; }
+.prices { margin: 0 18px 4px; color: var(--muted); font-size: 11.5px; }
+.prices summary { cursor: pointer; width: max-content; }
+.prices .row { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 6px; align-items: center; }
+.prices input { width: 62px; background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; font-family: var(--mono); font-size: 11px; }
+
+.canvas { padding: 8px 18px 40px; }
+.cols { display: flex; gap: 14px; align-items: flex-start; min-width: max-content; }
+.col { width: 244px; flex: none; }
+.chead { position: sticky; top: 0; z-index: 2; background: var(--bg); padding: 6px 0 8px; }
+.chead .t { font-weight: 650; display: flex; justify-content: space-between; gap: 6px; }
+.chead .t span:last-child { color: var(--muted); font-weight: 400; font-family: var(--mono); font-size: 11px; }
+.chead .n { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.chead .hr { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12px; }
+.chead .hr .bar { flex: 1; margin: 0; height: 6px; }
+
+.stack { display: flex; flex-direction: column; gap: 2px; }
+.blk { position: relative; display: flex; border-radius: 4px; overflow: hidden; cursor: pointer;
+       background: color-mix(in srgb, var(--rc) 13%, var(--panel)); border: 1px solid color-mix(in srgb, var(--rc) 28%, var(--line)); }
+.blk:hover { border-color: var(--rc); }
+.blk[aria-selected="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
+.blk.dim { opacity: .35; }
+.rail { width: 9px; flex: none; }
+.bbody { padding: 3px 7px; min-width: 0; flex: 1; overflow: hidden; }
+.bl { display: flex; justify-content: space-between; gap: 6px; font-size: 11px; }
+.bl .role { color: var(--rc); font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bl .tk { font-family: var(--mono); color: var(--muted); white-space: nowrap; }
+.pv { font-size: 11.5px; color: var(--muted); overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; word-break: break-word; }
+.bp { position: absolute; right: 4px; top: 3px; font-size: 10px; background: var(--ink); color: var(--panel); border-radius: 3px; padding: 0 4px; }
+.split { display: flex; align-items: center; gap: 6px; color: var(--warn); font-size: 11px; font-weight: 600; margin: 3px 0 1px; }
+.split::before, .split::after { content: ""; flex: 1; border-top: 1.5px dashed var(--warn); }
+.split.ok { color: var(--muted); font-weight: 400; }
+.split.ok::before, .split.ok::after { border-color: var(--line); }
+.resp { margin-top: 8px; border: 1.5px dashed color-mix(in srgb, var(--ai) 55%, var(--line)); border-radius: 4px; padding: 5px 8px; cursor: pointer; }
+.resp:hover { border-color: var(--ai); }
+.resp[aria-selected="true"] { outline: 2px solid var(--ink); outline-offset: 1px; }
+.resp .bl .role { color: var(--ai); }
+.err { color: var(--warn); font-size: 12px; word-break: break-word; }
+
+/* detail */
+.detail { background: var(--panel); border-left: 1px solid var(--line); overflow: auto; padding: 14px 16px; min-height: 0; }
+.detail .dh { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.detail .dh .sp { flex: 1; }
+.detail h2 { margin: 0 0 2px; font-size: 15px; }
+.detail .sub { color: var(--muted); margin-bottom: 10px; }
+.detail pre { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 10px; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); margin: 8px 0; max-height: 52vh; overflow: auto; }
+.pill { display: inline-block; padding: 1px 9px; border-radius: 10px; font-size: 11.5px; font-weight: 600; }
+.pill.hit { background: var(--good-bg); color: var(--hit); } .pill.wr { background: var(--note-bg); color: var(--write); } .pill.unc { background: var(--bg); color: var(--muted); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 12px; margin: 10px 0; }
+.kv dt { color: var(--muted); } .kv dd { margin: 0; font-family: var(--mono); }
+.note { color: var(--muted); font-size: 12px; margin-top: 14px; }
+details summary { cursor: pointer; color: var(--muted); }
+
+/* modal + toast */
+.modal { position: fixed; inset: 0; background: rgba(10,15,22,.55); display: grid; place-items: center; z-index: 20; padding: 16px; }
+.modal[hidden] { display: none; }
+.modal .box { background: var(--panel); border-radius: 12px; max-width: 560px; width: 100%; max-height: 90vh; overflow: auto; padding: 20px 22px; box-shadow: var(--shadow); }
+.modal h2 { margin: 0 0 8px; font-size: 17px; }
+.modal h3 { margin: 14px 0 4px; font-size: 13px; }
+.modal p, .modal li { color: var(--muted); }
+.modal ul { padding-left: 18px; margin: 4px 0; }
+.toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel); padding: 7px 14px; border-radius: 8px; z-index: 30; font-size: 12.5px; box-shadow: var(--shadow); }
+
+button:focus-visible, select:focus-visible, input:focus-visible, summary:focus-visible, .blk:focus-visible, .run:focus-visible, .resp:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+@media (max-width: 900px) {
+  .app, .app.detail-open { grid-template-columns: 1fr; grid-template-rows: auto auto 1fr; }
+  .side { max-height: 210px; border-right: none; border-bottom: 1px solid var(--line); }
+  .detail { position: fixed; inset: 0; z-index: 9; }
+  .legend { margin-left: 0; }
+}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <header class="hdr">
+    <h1><span class="logo" aria-hidden="true"><i></i></span>LLM call inspector</h1>
+    <span class="sp"></span>
+    <label class="live on" id="liveLbl" title="Automatically reload runs every few seconds so you can watch a run as it happens">
+      <input type="checkbox" id="live" checked hidden><span class="dot"></span><span id="liveTxt">Live</span>
+    </label>
+    <button class="btn icon" id="theme" title="Toggle light / dark theme" aria-label="Toggle theme">◐</button>
+    <button class="btn icon" id="helpBtn" title="How to read this page (?)" aria-label="Help">?</button>
+  </header>
+  <aside class="side">
+    <div class="search"><input id="q" type="search" placeholder="Filter runs…  ( / )" aria-label="Filter runs"></div>
+    <div class="count" id="count"></div>
+    <div class="runs" id="runs"></div>
+  </aside>
+  <section class="main" id="main"></section>
+  <aside class="detail" id="detail" hidden></aside>
+</div>
+
+<div class="modal" id="help" hidden role="dialog" aria-modal="true" aria-label="Help">
+  <div class="box">
+    <h2>How to read this page</h2>
+    <p>Each <b>column</b> is one LLM call, left to right in the order they happened. Each <b>box</b> in a column is one part of the prompt (tool schemas, system prompt, messages), top to bottom, sized by token count.</p>
+    <h3>The coloured strip on the left of each box</h3>
+    <ul>
+      <li><b style="color:var(--hit)">Green</b> – tokens read from the prompt cache (cheap, fast).</li>
+      <li><b style="color:var(--write)">Amber</b> – tokens written to the cache for the first time (slightly pricier).</li>
+      <li><b style="color:var(--muted)">Grey</b> – not cached, billed at the normal input price.</li>
+    </ul>
+    <h3>Dashed lines</h3>
+    <ul>
+      <li><b>new in this call</b> – everything above is identical to the previous call, so the cache can reuse it.</li>
+      <li><b style="color:var(--warn)">history changed here</b> – the prompt differs from the previous call at this point, so everything below can't be served from cache.</li>
+    </ul>
+    <h3>Keyboard</h3>
+    <ul>
+      <li><kbd>/</kbd> filter runs · <kbd>←</kbd> <kbd>→</kbd> previous / next call while a box is open · <kbd>Esc</kbd> close panel · <kbd>?</kbd> this help</li>
+    </ul>
+    <p style="margin-top:14px"><button class="btn primary" id="helpClose">Got it</button></p>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (s, r = document) => r.querySelector(s);
+function h(tag, props = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props || {})) {
+    if (v == null || v === false) continue;
+    if (k === "class") e.className = v;
+    else if (k === "style") e.style.cssText = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const k of kids.flat()) { if (k == null || k === false) continue; e.append(k.nodeType ? k : document.createTextNode(String(k))); }
+  return e;
+}
+const fmt = n => (n ?? 0).toLocaleString("en-US");
+const pct = x => (x * 100).toFixed(x > 0 && x < 0.1 ? 1 : 0) + "%";
+const money = x => "$" + (x < 0.01 ? x.toFixed(4) : x.toFixed(3));
+const store = {
+  get(k, d) { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+};
+function ago(t) {
+  const s = Math.max(0, Date.now() / 1000 - t);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + " h ago";
+  return new Date(t * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+let toastT;
+function toast(msg) {
+  document.querySelectorAll(".toast").forEach(n => n.remove());
+  const t = h("div", { class: "toast", role: "status" }, msg); document.body.append(t);
+  clearTimeout(toastT); toastT = setTimeout(() => t.remove(), 1800);
+}
+async function copy(text) {
+  try { await navigator.clipboard.writeText(text); toast("Copied to clipboard"); }
+  catch (e) {
+    const ta = h("textarea", { style: "position:fixed;opacity:0" }); ta.value = text; document.body.append(ta); ta.select();
+    try { document.execCommand("copy"); toast("Copied to clipboard"); } catch (e2) { toast("Copy failed"); }
+    ta.remove();
+  }
+}
+
+const state = { list: null, execId: null, exec: null, invoc: 0, selected: null, filter: "", compact: store.get("llmi-compact", false), error: false };
+const prices = Object.assign({ in: 3, read: 0.3, write: 3.75, out: 15 }, store.get("llmi-prices", {}));
+
+// ---------- data -> blocks
+const ROLE = { human: "human", user: "human", system: "system", ai: "ai", assistant: "ai", tool: "tool", function: "tool" };
+const ROLE_LABEL = { tools: "tool schemas", system: "system", human: "human", ai: "assistant", tool: "tool result", other: "other" };
+const roleVar = r => ({ tools: "--tools", system: "--system", human: "--human", ai: "--ai", tool: "--toolres" }[r] || "--other");
+
+function contentText(m) {
+  const c = m.content;
+  let t = "", hasUse = false;
+  if (typeof c === "string") t = c;
+  else if (Array.isArray(c)) {
+    t = c.map(b => {
+      if (typeof b === "string") return b;
+      if (b.type === "text") return b.text;
+      if (b.type === "tool_use") { hasUse = true; return `tool_use ${b.name}(${JSON.stringify(b.input ?? {})})`; }
+      return JSON.stringify(b);
+    }).join("\n");
+  } else if (c != null) t = JSON.stringify(c);
+  if (m.tool_calls && m.tool_calls.length && !hasUse)
+    t += (t ? "\n" : "") + m.tool_calls.map(tc => `tool_call ${tc.name}(${JSON.stringify(tc.args)})`).join("\n");
+  return t;
+}
+const hasBreakpoint = m => Array.isArray(m.content) && m.content.some(b => b && typeof b === "object" && b.cache_control);
+const overlap = (a0, a1, b0, b1) => Math.max(0, Math.min(a1, b1) - Math.max(a0, b0));
+
+function buildBlocks(call) {
+  const blocks = [];
+  if (call.tools && call.tools.length) {
+    const txt = JSON.stringify(call.tools);
+    blocks.push({ role: "tools", title: `${call.tools.length} tool${call.tools.length > 1 ? "s" : ""}`, text: txt, raw: call.tools, bp: txt.includes('"cache_control"'), est: Math.ceil(txt.length / 3.6) });
+  }
+  (call.messages || []).forEach((m, i) => {
+    const role = ROLE[m.type] || "other";
+    const text = contentText(m);
+    const title = role === "tool" && m.name ? `tool result · ${m.name}` : ROLE_LABEL[role];
+    blocks.push({ role, title, text, raw: m, bp: hasBreakpoint(m), est: Math.ceil(text.length / 3.8) + 4, index: i });
+  });
+  const estTotal = blocks.reduce((s, b) => s + b.est, 0) || 1;
+  const total = call.input_tokens || estTotal;
+  const f = total / estTotal;
+  const read = call.cache_read || 0, wr = call.cache_creation || 0;
+  let cur = 0;
+  for (const b of blocks) {
+    b.tokens = b.est * f;
+    const a0 = cur, a1 = cur + b.tokens; cur = a1;
+    b.hit = overlap(a0, a1, 0, read);
+    b.wr = overlap(a0, a1, read, read + wr);
+    b.unc = Math.max(0, b.tokens - b.hit - b.wr);
+    b.sig = b.role + "\u0001" + b.text;
+  }
+  return { blocks, total, estimated: !call.input_tokens };
+}
+
+function groupInvocations(exec) {
+  const map = new Map();
+  for (const c of exec.calls) { if (!map.has(c.root_run_id)) map.set(c.root_run_id, []); map.get(c.root_run_id).push(c); }
+  return [...map.entries()].map(([id, calls]) => {
+    calls.sort((a, b) => a.started - b.started);
+    const first = (calls[0].messages || []).find(m => (ROLE[m.type] || "") === "human");
+    const snippet = first ? contentText(first).replace(/\s+/g, " ").slice(0, 60) : "(no human message)";
+    return { id, calls, snippet };
+  }).sort((a, b) => a.calls[0].started - b.calls[0].started);
+}
+
+// plain-language findings
+function computeInsights(calls, built, S) {
+  const out = [];
+  const caching = S.read + S.wr > 0;
+  if (!S.in) return out;
+  if (!caching) {
+    out.push({ kind: "warn", t: "No prompt caching detected", d: "None of these calls reported cache reads or writes. If you use Anthropic models, add cache_control breakpoints to your stable prompt prefix (tools + system prompt) to cut cost and latency. Other providers may simply not report cache usage." });
+    return out;
+  }
+  const rate = S.read / S.in;
+  out.push(rate >= 0.5
+    ? { kind: "good", t: `Cache is working: ${pct(rate)} of input tokens were served from cache`, d: "Repeated prompt prefixes are being reused." }
+    : { kind: "info", t: `Only ${pct(rate)} of input tokens were served from cache`, d: "Look for columns where the red “history changed here” line appears early, or calls with 0% cached." });
+  calls.forEach((c, i) => {
+    if (i === 0) return;
+    const prev = built[i - 1].blocks, cur = built[i].blocks;
+    let shared = 0;
+    while (shared < cur.length && shared < prev.length && cur[shared].sig === prev[shared].sig) shared++;
+    const broke = shared < prev.length && shared < cur.length;
+    const noRead = !(c.cache_read > 0) && (calls[i - 1].cache_creation > 0 || calls[i - 1].cache_read > 0);
+    if (broke || noRead) {
+      out.push({ kind: "warn", i, t: `Call ${i + 1} missed the cache`,
+        d: broke ? `The prompt changed at “${cur[shared].title}” (block ${shared + 1}) compared with call ${i}, so everything after it had to be re-processed.`
+                 : `The prompt matches call ${i}, but no tokens were read from cache. The cache may have expired (≈5 min TTL) or no breakpoint was set.` });
+    }
+  });
+  const errs = calls.filter(c => c.error).length;
+  if (errs) out.push({ kind: "warn", t: `${errs} call${errs > 1 ? "s" : ""} failed`, d: "Failed calls show the error in place of a response." });
+  return out.slice(0, 5);
+}
+
+// ---------- rendering
+function railStyle(b) {
+  const t = b.tokens || 1;
+  const a = (b.hit / t) * 100, w = a + (b.wr / t) * 100;
+  return `background: linear-gradient(to bottom, var(--hit) 0 ${a}%, var(--write) ${a}% ${w}%, var(--unc) ${w}% 100%)`;
+}
+const CMD_RUN = "python -m llm_inspector run your_app.py";
+const CMD_ENV = 'eval "$(python -m llm_inspector env)"';
+function cmdBox(cmd) { return h("div", { class: "cmdbox" }, h("code", {}, cmd), h("button", { class: "btn", onclick: () => copy(cmd) }, "Copy")); }
+
+function renderSide() {
+  const box = $("#runs"); box.replaceChildren();
+  if (state.list === null) { box.append(h("div", { class: "skeleton" }), h("div", { class: "skeleton" }), h("div", { class: "skeleton" })); $("#count").textContent = ""; return; }
+  const q = state.filter.toLowerCase();
+  const rows = state.list.filter(r => !q || (r.command || "").toLowerCase().includes(q) || r.id.toLowerCase().includes(q));
+  $("#count").textContent = state.list.length ? `${rows.length} of ${state.list.length} run${state.list.length > 1 ? "s" : ""}` : "";
+  if (!state.list.length) { box.append(h("div", { class: "empty" }, "No runs recorded yet. See the instructions on the right to capture your first one.")); return; }
+  if (!rows.length) { box.append(h("div", { class: "empty" }, `No runs match “${state.filter}”.`)); return; }
+  for (const r of rows) {
+    const running = !r.ended && Date.now() / 1000 - r.mtime < 120;
+    box.append(h("div", { class: "run", tabindex: 0, role: "button", "aria-current": r.id === state.execId ? "true" : "false",
+      onclick: () => selectExec(r.id), onkeydown: e => { if (e.key === "Enter" && e.target === e.currentTarget) selectExec(r.id); } },
+      h("div", { class: "cmd", title: r.command }, r.command || r.id),
+      h("div", { class: "meta" }, h("span", { title: new Date(r.started * 1000).toLocaleString() }, ago(r.started)), running ? h("span", { class: "badge" }, "running") : null),
+      h("div", { class: "meta" }, h("span", {}, `${r.calls} call${r.calls === 1 ? "" : "s"} · ${r.invocations} invocation${r.invocations === 1 ? "" : "s"}`), h("span", {}, `${pct(r.hit_rate)} cached`)),
+      h("div", { class: "mini", title: `${pct(r.hit_rate)} of input tokens read from cache` }, h("b", { style: `width:${r.hit_rate * 100}%` })),
+      h("button", { class: "del", title: "Delete this run", "aria-label": "Delete run", onclick: e => { e.stopPropagation(); deleteRun(r); } }, "✕")));
+  }
+}
+
+function renderOnboarding(main) {
+  main.append(h("div", { class: "scroll" }, h("div", { class: "onboard" },
+    h("h2", {}, state.list && state.list.length ? "Select a run" : "Capture your first LLM run"),
+    h("p", {}, state.list && state.list.length ? "Pick a run from the list on the left to see every LLM call, its prompt, and how much of it was served from cache."
+      : "LLM inspector records every LangChain / LangGraph chat-model call your program makes. No code changes needed. This page updates live as calls come in."),
+    h("div", { class: "step" }, h("div", { class: "n" }, h("span", {}, "1"), "Run your script through the inspector"), h("div", { class: "d" }, "Same process, nothing to modify in your code."), cmdBox(CMD_RUN)),
+    h("div", { class: "step" }, h("div", { class: "n" }, h("span", {}, "2"), "…or capture any Python process"), h("div", { class: "d" }, "Useful for servers, uvicorn --reload, gunicorn workers and subprocesses. Run this in your shell first."), cmdBox(CMD_ENV)),
+    h("div", { class: "step" }, h("div", { class: "n" }, h("span", {}, "3"), "Watch it appear"), h("div", { class: "d" }, "The first call shows up here within a few seconds. Press ", h("kbd", {}, "?"), " for a guide to reading the view.")))));
+}
+
+function renderMain() {
+  const main = $("#main"); main.replaceChildren();
+  if (state.list === null && !state.error) { main.append(h("div", { class: "skeleton", style: "height:120px" })); return; }
+  if (state.error && state.list === null) { main.append(h("div", { class: "empty" }, "Can't reach the inspector server. Is ", h("code", {}, "python -m llm_inspector serve"), " still running?")); return; }
+  if (!state.exec) { renderOnboarding(main); return; }
+  const invs = groupInvocations(state.exec);
+  if (state.invoc >= invs.length) state.invoc = 0;
+  const inv = invs[state.invoc];
+  const calls = inv.calls;
+  const built = calls.map(buildBlocks);
+
+  const sel = h("select", { "aria-label": "Invocation", title: "An invocation is one top-level call of your chain / graph / agent", onchange: e => { state.invoc = +e.target.value; state.selected = null; renderMain(); renderDetail(); } },
+    invs.map((v, i) => h("option", { value: i, selected: i === state.invoc }, `Invocation ${i + 1} of ${invs.length} · ${v.calls.length} call${v.calls.length > 1 ? "s" : ""} · ${v.snippet}`)));
+  const prevBtn = h("button", { class: "btn icon", disabled: state.invoc === 0, "aria-label": "Previous invocation", onclick: () => { state.invoc--; state.selected = null; renderMain(); renderDetail(); } }, "‹");
+  const nextBtn = h("button", { class: "btn icon", disabled: state.invoc >= invs.length - 1, "aria-label": "Next invocation", onclick: () => { state.invoc++; state.selected = null; renderMain(); renderDetail(); } }, "›");
+  const density = h("div", { class: "seg", role: "group", "aria-label": "Block size" },
+    h("button", { "aria-pressed": String(!state.compact), title: "Block height reflects token count", onclick: () => { state.compact = false; store.set("llmi-compact", false); renderMain(); } }, "Proportional"),
+    h("button", { "aria-pressed": String(state.compact), title: "All blocks the same small height", onclick: () => { state.compact = true; store.set("llmi-compact", true); renderMain(); } }, "Compact"));
+  const legend = h("div", { class: "legend" },
+    h("span", {}, h("i", { style: "background:var(--hit)" }), "read from cache"),
+    h("span", {}, h("i", { style: "background:var(--write)" }), "written to cache"),
+    h("span", {}, h("i", { style: "background:var(--unc)" }), "not cached"),
+    h("span", { title: "This message carries an Anthropic cache_control breakpoint" }, h("span", { class: "bp", style: "position:static;margin-right:5px" }, "cc"), "breakpoint"));
+  const top = h("div", { class: "top" }, prevBtn, sel, nextBtn, density, legend);
+
+  const S = calls.reduce((s, c) => { s.in += c.input_tokens || 0; s.out += c.output_tokens || 0; s.read += c.cache_read || 0; s.wr += c.cache_creation || 0; s.lat += c.latency || 0; return s; }, { in: 0, out: 0, read: 0, wr: 0, lat: 0 });
+  const unc = Math.max(0, S.in - S.read - S.wr);
+  const withCache = (unc * prices.in + S.read * prices.read + S.wr * prices.write + S.out * prices.out) / 1e6;
+  const noCache = (S.in * prices.in + S.out * prices.out) / 1e6;
+  const saved = noCache - withCache;
+
+  const insights = computeInsights(calls, built, S);
+  const insEl = insights.length ? h("div", { class: "insights" }, insights.map(i => h("div", { class: "ins " + i.kind },
+    h("div", { class: "ic" }, i.kind === "good" ? "✓" : i.kind === "warn" ? "!" : "i"),
+    h("div", {}, h("div", { class: "tt" }, i.t, i.i != null ? [" · ", h("button", { class: "lnk", onclick: () => scrollToCall(i.i) }, "jump to call")] : null), h("div", { class: "dd" }, i.d))))) : null;
+
+  const stat = (v, l, extra, sub) => h("div", { class: "stat" }, h("div", { class: "v" }, v), h("div", { class: "l" }, l), sub ? h("div", { class: "s" }, sub) : null, extra);
+  const mix = h("div", { class: "bar", title: "input token mix: cache read / cache write / uncached" },
+    h("b", { style: `width:${S.in ? S.read / S.in * 100 : 0}%;background:var(--hit)` }),
+    h("b", { style: `width:${S.in ? S.wr / S.in * 100 : 0}%;background:var(--write)` }));
+  const pin = (k, label) => h("label", {}, label + " ", h("input", { type: "number", step: "0.01", min: "0", value: prices[k], onchange: e => { prices[k] = +e.target.value || 0; store.set("llmi-prices", prices); renderMain(); } }));
+  const stats = h("div", { class: "stats" },
+    stat(fmt(calls.length), "LLM calls"),
+    stat(fmt(S.in), "input tokens", mix),
+    stat(pct(S.in ? S.read / S.in : 0), "served from cache"),
+    stat(fmt(S.wr), "tokens written to cache"),
+    stat(fmt(S.out), "output tokens"),
+    stat(`${S.lat.toFixed(1)}s`, "total LLM latency"),
+    stat(money(withCache), "estimated cost", null, saved > 0 ? `saves ${money(saved)} vs no cache` : null));
+  const priceBox = h("details", { class: "prices" }, h("summary", {}, "Pricing assumptions (used for the cost estimate)"),
+    h("div", { class: "row" }, "USD per 1M tokens:", pin("in", "input"), pin("read", "cache read"), pin("write", "cache write"), pin("out", "output"),
+      h("span", {}, "Defaults are placeholders; match them to your model.")));
+
+  const maxTok = Math.max(...built.map(b => b.total), 1);
+  const ppt = Math.min(0.32, 760 / maxTok);
+  const cols = h("div", { class: "cols" });
+  calls.forEach((c, ci) => {
+    const { blocks, total, estimated } = built[ci];
+    const prev = ci > 0 ? built[ci - 1].blocks : null;
+    let shared = 0;
+    if (prev) while (shared < blocks.length && shared < prev.length && blocks[shared].sig === prev[shared].sig) shared++;
+    const rate = total ? (c.cache_read || 0) / total : 0;
+    const head = h("div", { class: "chead" },
+      h("div", { class: "t" }, h("span", {}, `Call ${ci + 1}${c.node ? " · " + c.node : ""}`), h("span", {}, c.step != null ? `step ${c.step}` : "")),
+      h("div", { class: "n" }, `${fmt(total)} in · ${fmt(c.output_tokens)} out · ${(c.latency || 0).toFixed(2)}s`),
+      h("div", { class: "hr", title: `${fmt(c.cache_read)} read, ${fmt(c.cache_creation)} written, of ${fmt(total)} input tokens` }, h("b", {}, pct(rate)),
+        h("div", { class: "bar" },
+          h("b", { style: `width:${rate * 100}%;background:var(--hit)` }),
+          h("b", { style: `width:${total ? (c.cache_creation || 0) / total * 100 : 0}%;background:var(--write)` })),
+        h("span", { style: "color:var(--muted)" }, "cached")));
+    const stack = h("div", { class: "stack" });
+    blocks.forEach((b, bi) => {
+      if (prev && bi === shared) {
+        const appendOnly = shared === prev.length;
+        stack.append(h("div", { class: "split" + (appendOnly ? " ok" : ""), title: appendOnly ? "Everything above is identical to the previous call" : "Content changed here vs previous call, so cache entries below this point cannot be reused" },
+          appendOnly ? "new in this call" : "history changed here"));
+      }
+      const hgt = state.compact ? 34 : Math.max(30, Math.round(b.tokens * ppt));
+      const isSel = state.selected && state.selected.ci === ci && state.selected.bi === bi;
+      const pick = () => select(ci, bi);
+      stack.append(h("div", { class: "blk", style: `--rc:var(${roleVar(b.role)});height:${hgt}px`, tabindex: 0, role: "button", "aria-selected": isSel ? "true" : "false",
+        title: `${b.title}: ~${fmt(Math.round(b.tokens))} tokens`, onclick: pick, onkeydown: e => { if (e.key === "Enter") pick(); } },
+        h("div", { class: "rail", style: railStyle(b) }),
+        h("div", { class: "bbody" },
+          h("div", { class: "bl" }, h("span", { class: "role" }, b.title), h("span", { class: "tk" }, (estimated ? "~" : "") + fmt(Math.round(b.tokens)))),
+          hgt >= 48 ? h("div", { class: "pv", style: `-webkit-line-clamp:${Math.max(1, Math.min(6, Math.floor((hgt - 26) / 15)))}` }, b.text.slice(0, 400)) : null),
+        b.bp ? h("span", { class: "bp" }, "cc") : null));
+    });
+    if (prev && shared === blocks.length && shared < prev.length) stack.append(h("div", { class: "split" }, "history shrank"));
+    const outTxt = contentText(c.output || {});
+    const outSel = state.selected && state.selected.ci === ci && state.selected.bi === "out";
+    const resp = c.error ? h("div", { class: "resp" }, h("div", { class: "err" }, c.error))
+      : h("div", { class: "resp", tabindex: 0, role: "button", "aria-selected": outSel ? "true" : "false", onclick: () => select(ci, "out"), onkeydown: e => { if (e.key === "Enter") select(ci, "out"); } },
+        h("div", { class: "bl" }, h("span", { class: "role" }, "response"), h("span", { class: "tk" }, c.output ? fmt(c.output_tokens) : "…")),
+        h("div", { class: "pv", style: "-webkit-line-clamp:3" }, c.output ? (outTxt.slice(0, 240) || "(empty)") : "waiting for response…"));
+    cols.append(h("div", { class: "col", id: "call-" + ci }, head, stack, resp));
+  });
+  main.append(top, h("div", { class: "scroll", id: "scroll" }, insEl, stats, priceBox, h("div", { class: "canvas" }, cols)));
+  state._built = built; state._calls = calls;
+}
+
+function select(ci, bi) { state.selected = { ci, bi }; const sc = $("#scroll"), x = sc ? [sc.scrollTop, sc.scrollLeft] : [0, 0]; renderMain(); renderDetail(); const n = $("#scroll"); if (n) { n.scrollTop = x[0]; n.scrollLeft = x[1]; } }
+function scrollToCall(i) { const el = $("#call-" + i); if (el) el.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" }); }
+function closeDetail() { state.selected = null; renderMain(); renderDetail(); }
+
+function stepSelection(dir) {
+  const s = state.selected; if (!s || !state._calls) return;
+  const ci = s.ci + dir;
+  if (ci < 0 || ci >= state._calls.length) return;
+  const nb = state._built[ci].blocks.length;
+  select(ci, s.bi === "out" ? "out" : Math.min(s.bi, nb - 1));
+  const el = $("#call-" + ci); if (el) el.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+}
+
+function renderDetail() {
+  const d = $("#detail"), app = $("#app");
+  const s = state.selected;
+  if (!s || !state._calls) { d.hidden = true; app.classList.remove("detail-open"); return; }
+  d.hidden = false; app.classList.add("detail-open"); d.replaceChildren();
+  const c = state._calls[s.ci];
+  const nav = h("div", { class: "dh" },
+    h("button", { class: "btn icon", disabled: s.ci === 0, title: "Same block in previous call (←)", onclick: () => stepSelection(-1) }, "←"),
+    h("button", { class: "btn icon", disabled: s.ci >= state._calls.length - 1, title: "Same block in next call (→)", onclick: () => stepSelection(1) }, "→"),
+    h("span", { class: "sub", style: "margin:0" }, `Call ${s.ci + 1} of ${state._calls.length}`),
+    h("span", { class: "sp" }),
+    h("button", { class: "btn icon", title: "Close (Esc)", "aria-label": "Close", onclick: closeDetail }, "✕"));
+  if (s.bi === "out") {
+    const txt = contentText(c.output || {}) || "(empty)";
+    d.append(nav, h("h2", {}, "Response"), h("div", { class: "sub" }, `${fmt(c.output_tokens)} output tokens · stop reason: ${c.stop_reason ?? "n/a"} · ${(c.latency || 0).toFixed(2)}s`),
+      h("button", { class: "btn", onclick: () => copy(txt) }, "Copy text"), h("pre", {}, txt),
+      h("details", {}, h("summary", {}, "raw message JSON"), h("pre", {}, JSON.stringify(c.output, null, 2))));
+    return;
+  }
+  const b = state._built[s.ci].blocks[s.bi];
+  const t = Math.round(b.tokens);
+  const fully = x => x >= b.tokens * 0.98;
+  const [status, cls] = fully(b.hit) ? ["Fully read from cache", "hit"] : fully(b.wr) ? ["Fully written to cache", "wr"]
+    : fully(b.unc) ? ["Not cached", "unc"] : ["Partly cached (cache boundary falls inside this block)", "wr"];
+  const body = b.role === "tools" ? JSON.stringify(b.raw, null, 2) : (b.text || "(empty)");
+  d.append(nav, h("h2", {}, b.title), h("div", { class: "sub" }, `${c.model || "model unknown"}${c.provider ? " · " + c.provider : ""}`),
+    h("span", { class: "pill " + cls }, status),
+    h("dl", { class: "kv" },
+      h("dt", {}, "tokens"), h("dd", {}, (state._built[s.ci].estimated ? "~" : "") + fmt(t)),
+      h("dt", {}, "cache read"), h("dd", {}, fmt(Math.round(b.hit))),
+      h("dt", {}, "cache write"), h("dd", {}, fmt(Math.round(b.wr))),
+      h("dt", {}, "uncached"), h("dd", {}, fmt(Math.round(b.unc))),
+      h("dt", {}, "breakpoint"), h("dd", {}, b.bp ? "has cache_control" : "none")),
+    h("button", { class: "btn", onclick: () => copy(body) }, "Copy content"), h("pre", {}, body),
+    ...(b.role !== "tools" ? [h("details", {}, h("summary", {}, "raw message JSON"), h("pre", {}, JSON.stringify(b.raw, null, 2)))] : []),
+    h("div", { class: "note" }, "Providers report cache usage once per call, not per message. Per-block numbers come from walking the prompt in order (tools, system, messages), assigning the first cache_read tokens as hits and the next cache_creation tokens as writes. Block sizes are estimated from text length and scaled to the reported input total."));
+}
+
+// ---------- loading / actions
+async function jget(u) { const r = await fetch(u); if (!r.ok) throw new Error(r.status); return r.json(); }
+async function selectExec(id) {
+  state.execId = id; state.selected = null; state.invoc = 0;
+  history.replaceState(null, "", "#" + encodeURIComponent(id));
+  try { state.exec = await jget("/api/executions/" + encodeURIComponent(id)); } catch (e) { state.exec = null; toast("Could not load that run"); }
+  renderSide(); renderMain(); renderDetail();
+}
+async function deleteRun(r) {
+  if (!confirm(`Delete this run?\n\n${r.command || r.id}\n\nThis removes the saved file and can't be undone.`)) return;
+  try {
+    const res = await fetch("/api/executions/" + encodeURIComponent(r.id), { method: "DELETE" });
+    if (!res.ok) throw new Error(res.status);
+    toast("Run deleted");
+    if (state.execId === r.id) { state.execId = null; state.exec = null; state.selected = null; history.replaceState(null, "", "#"); }
+    await refresh(false, true);
+    if (!state.execId && state.list.length) selectExec(state.list[0].id); else { renderMain(); renderDetail(); }
+  } catch (e) { toast("Delete failed"); }
+}
+function setLive(on) {
+  $("#live").checked = on;
+  const l = $("#liveLbl"); l.classList.toggle("on", on && !state.error); l.classList.toggle("err", on && state.error);
+  $("#liveTxt").textContent = !on ? "Paused" : state.error ? "Reconnecting…" : "Live";
+}
+async function refresh(first, force) {
+  try {
+    const list = await jget("/api/executions");
+    const was = state.error; state.error = false; if (was) setLive($("#live").checked);
+    const changed = force || state.list === null || JSON.stringify(list) !== JSON.stringify(state.list);
+    state.list = list;
+    if (first && !state.execId && list.length) {
+      const want = decodeURIComponent(location.hash.slice(1));
+      return selectExec(list.find(r => r.id === want) ? want : list[0].id);
+    }
+    if (changed) {
+      renderSide();
+      const cur = list.find(r => r.id === state.execId);
+      if (cur && (!state.exec || state.exec.calls.length !== cur.calls || (cur.ended && !state.exec.ended))) {
+        state.exec = await jget("/api/executions/" + encodeURIComponent(cur.id));
+        renderMain(); renderDetail();
+      }
+    }
+    if (first && !list.length) { renderSide(); renderMain(); }
+  } catch (e) {
+    state.error = true; setLive($("#live").checked);
+    if (state.list === null) { renderSide(); renderMain(); }
+  }
+}
+
+// ---------- chrome
+const root = document.documentElement;
+const savedTheme = store.get("llmi-theme", null);
+if (savedTheme) root.setAttribute("data-theme", savedTheme);
+$("#theme").onclick = () => {
+  const dark = root.getAttribute("data-theme") === "dark" || (!root.getAttribute("data-theme") && matchMedia("(prefers-color-scheme: dark)").matches);
+  const next = dark ? "light" : "dark"; root.setAttribute("data-theme", next); store.set("llmi-theme", next);
+};
+$("#liveLbl").addEventListener("click", e => { e.preventDefault(); setLive(!$("#live").checked); if ($("#live").checked) refresh(false); });
+const help = $("#help");
+const openHelp = () => { help.hidden = false; $("#helpClose").focus(); };
+const closeHelp = () => { help.hidden = true; };
+$("#helpBtn").onclick = openHelp; $("#helpClose").onclick = closeHelp;
+help.addEventListener("click", e => { if (e.target === help) closeHelp(); });
+$("#q").addEventListener("input", e => { state.filter = e.target.value; renderSide(); });
+document.addEventListener("keydown", e => {
+  const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+  if (e.key === "Escape") { if (!help.hidden) closeHelp(); else if (typing && document.activeElement.id === "q") document.activeElement.blur(); else if (state.selected) closeDetail(); return; }
+  if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.key === "/") { e.preventDefault(); $("#q").focus(); }
+  else if (e.key === "?") openHelp();
+  else if (e.key === "ArrowLeft") stepSelection(-1);
+  else if (e.key === "ArrowRight") stepSelection(1);
+});
+
+setLive(true); renderSide(); renderMain();
+refresh(true);
+setInterval(() => { if ($("#live").checked) refresh(false); }, 2500);
+setInterval(() => { if (state.list && $("#live").checked) renderSide(); }, 30000); // keep "x min ago" fresh
+</script>
+</body>
+</html>
